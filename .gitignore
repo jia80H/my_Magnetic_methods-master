@@ -1,0 +1,9 @@
+*.jpg
+*.txt
+*.png
+*.zip
+__pycache__
+*.log
+*.npy
+*.hdf5
+YOLO/Model_training/
