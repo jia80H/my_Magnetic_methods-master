@@ -1,26 +1,25 @@
 # Magnetic_methods
 
-# Step 1: Downloading/opening files
+## Step 1: download needed packages
 
-### i) Download all files as a .zip
+### i)  create a new environment and activate it: 
+1. `conda create -name yor_env_name python=3.9`
+2. `conda activate yor_env_name`
 
-### ii) Open Google Colab in your favorite browser. Import the .ipynb file you want to run.
+### ii) download YOLOv8 and other packages you need:
+`pip install ultralytics`
 
-# Step 2: Enabling GPU within your notebook
-You will want to enable GPU acceleration within your Colab notebook.
+
+## Step 2: create synthetic data
+run scripts in `./YOLOv8/my_synthetic_data` create YOLOv8 and Densenet synthetic data.
+## Step 3: YOLOv8 classifies dipole and ellipsoid.
 
 ### Steps:
 
-### i) Click **Edit** at top left of your notebook
+### i) train
 
-![Unknown](https://user-images.githubusercontent.com/48021226/141442417-3273316e-0320-4dea-b6f1-1dfdaba115d7.png)
+### ii) pridict
 
-### ii) Click **Notebook Settings** within dropdown
+### iii) output data for Densent to pridect parameters of dipole and ellipsoid.
 
-![2](https://user-images.githubusercontent.com/48021226/141442642-db42495b-6cd1-4a7a-96dc-8132ddd515f9.png)
 
-### iii) Under 'Hardware Accelerator' select **GPU** and then hit **Save**
-
-![3](https://user-images.githubusercontent.com/48021226/141442662-3239bdba-0128-4149-ba76-337fef2637c8.png)
-
-Your notebook should now have GPU enabled!

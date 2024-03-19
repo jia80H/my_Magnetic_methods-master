@@ -2,8 +2,17 @@
 *.txt
 *.png
 *.zip
+
+# 缓存
 __pycache__
 *.log
+
+# 大型数据
 *.npy
 *.hdf5
 YOLO/Model_training/
+
+# YOLOv8
+runs/
+*.pt
+*.cache
