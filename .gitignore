@@ -16,3 +16,4 @@ YOLO/Model_training/
 runs/
 *.pt
 *.cache
+parameters.yaml
