@@ -1,20 +1,9 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-
-import os
-from sklearn.utils import shuffle
-import random
-from skimage import draw
-import pandas as pd
-
-from PIL import Image
-
-import seaborn as sns
 
 
-class MyModel(object):
+class Ellipse(object):
     miu_0 = 4 * np.pi * (1e-7)  # μ0为真空磁导率
+    pi = np.pi
 
     def __init__(self, map_length=25, zmax=100, a=0.4, b=0.1, c=0.1,
                  gama=90.0, theta=0.0, phi=-5.0, x=0, y=0, z=1.5, b_0=55000.0, I=70.0, D=3.5) -> None:
@@ -47,12 +36,12 @@ class MyModel(object):
         self.A = self.__euler_angles()  # 欧拉旋转角
         self.X_d = self.__effective_permeability_matrix()  # 计算有效磁化率矩阵
         self.m_i = self.__total_magnetic_dipole_moment()  # 总磁偶极矩
-        self.F = self.__ji_suan_yi_chang()
+        self.F = self.__ji_suan_yi_chang_vectorized()
 
     # 计算体积
 
     def __volme(self):
-        return 4/3*np.pi*self.axis[0]*self.axis[1]*self.axis[2]
+        return 4/3*self.pi*self.axis[0]*self.axis[1]*self.axis[2]
 
     # 计算地磁场
     def __dicichang(self):
@@ -91,14 +80,19 @@ class MyModel(object):
     # 计算总磁偶极矩
 
     def __total_magnetic_dipole_moment(self):
-        m_i = (self.V/MyModel.miu_0)*self.A.T @ self.X_d @ self.A @ self.B_0
-
+        try:
+            m_i = (self.V / self.miu_0) * \
+                self.A.T @ self.X_d @ self.A @ self.B_0
+        except Exception as e:
+            # 异常处理
+            raise RuntimeError(
+                "Failed to calculate total magnetic dipole moment: {}".format(e))
         return m_i
 
     def __ji_suan_yi_chang(self):
         X = self.X
         Y = self.Y
-        miu_0 = MyModel.miu_0
+        miu_0 = self.miu_0
         m_i = self.m_i
         I = self.I
         D = self.D
@@ -130,3 +124,37 @@ class MyModel(object):
                 F1[i, j] = b[i, j] @ igrf.T
 
         return F1
+
+    def __ji_suan_yi_chang_vectorized(self):
+        miu_0 = self.miu_0
+        m_i = self.m_i
+        x_0, y_0, z_0 = self.center
+        X_0, Y_0 = np.meshgrid(self.X, self.Y)
+        Z = np.zeros_like(X_0)
+
+        R = np.stack((X_0 - x_0, Y_0 - y_0, Z - z_0), axis=-1)
+        RR = np.linalg.norm(R, axis=-1)
+        temp1 = miu_0 / (4 * np.pi * RR ** 3)
+        temp2 = 3 / RR ** 2
+        temp3 = np.tensordot(R, m_i, axes=(-1, 0))
+        temp4 = temp3[..., None] * R
+        temp5 = temp2[..., None] * temp4 - m_i
+        b = temp1[..., None] * temp5
+        I = self.I
+        D = self.D
+        igrf = np.array([np.cos(I)*np.cos(D), np.cos(I) *
+                        np.sin(D), np.sin(I)], dtype=float)
+        self.igrf = igrf
+        F1 = np.tensordot(b, igrf, axes=(-1, -1))
+
+        return F1
+
+    def parameter(self):
+        """
+        返回参数 x y z r e I
+        """
+        pass
+
+
+if __name__ == '__main__':
+    test = Ellipse()
