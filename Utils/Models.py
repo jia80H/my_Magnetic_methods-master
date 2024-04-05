@@ -1,8 +1,10 @@
+import os
+from scipy import ndimage
 from PIL import Image
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-
+from matplotlib.patches import Rectangle
 # 设置默认字体为黑体
 plt.rcParams['font.family'] = ['WenQuanYi Zen Hei']  # 黑体
 # 或者设置能够支持中文的其他字体名称
@@ -408,7 +410,6 @@ class Dipole(MyModels):
         return bbox
 
     def plt_with_box(self, levels=16, cmap='seismic'):
-        from matplotlib.patches import Rectangle
         map_length = self.map_length
         zmax = self.zmax
 
@@ -437,6 +438,42 @@ kind = [Dipole, Ellipse]
 
 
 def generate_parameters_of_Dipole(
+        r_max=0.18, h_max=1.8,
+        data_num=4096, Rfrequency=0.02, Hfrequency=0.2, nummax=9, seed=56):
+    """ 
+    返回一个Parameters_array,包含h倍率,r倍率的所有排列组合
+    Parameters_array[i,:]为第i个
+    """
+    r_min = 0.1
+    r_max = r_max
+    r_array = np.arange(r_min, r_max, Rfrequency)
+    h_min = 1
+    h_max = h_max
+    h_array = np.arange(h_min, h_max, Hfrequency)
+
+    n_examples = r_array.shape[0] * h_array.shape[0]
+
+    Parameters_array = np.zeros((n_examples, 2))
+
+    i_p = 0
+
+    for i_r in r_array:
+        for i_h in h_array:
+            Parameters_array[i_p, 0] = i_r
+            Parameters_array[i_p, 1] = i_h
+            i_p += 1
+    num_of_rh = Parameters_array.shape[0]
+    np.random.seed(seed)
+    n = np.random.randint(num_of_rh, size=(data_num, nummax))
+    Parameters_array_of_all = np.zeros((data_num, nummax, 2))
+    for i in range(data_num):
+        for j in range(nummax):
+            Parameters_array_of_all[i, j, :] = Parameters_array[n[i, j]]
+
+    return Parameters_array_of_all
+
+
+def generate_parameters_of_(
         r_max=0.18, h_max=1.8,
         data_num=4096, Rfrequency=0.02, Hfrequency=0.2, nummax=9, seed=56):
     """ 
@@ -512,261 +549,286 @@ def generate_random_muti_dipole(
     return parameter, num_of_dipoles, bbox, datas
 
 
-def YOLO_fomat(parameter, bbox, num_of_dipoles, data,  img_size=100):
-    row = data.shape[0]
-    data_img = np.zeros((row, img_size, img_size, 3))
-    pass
+def generate_random_muti_mix_data(
+        r_max=0.18, h_max=1.8, Hfrequency=0.2, Rfrequency=0.02,
+        map_length=25, r_max_grid=0.2,
+        nummax=9, data_num=4096, seed=43, zmax=100):
+    """
+    返回parameters, num_of_dipoles, data
+    """
+    global kind
+    np.random.seed(seed)
+    datas = np.zeros([data_num, zmax, zmax])
+    # 生成坐标参数
+    parameters_n_of_xy = generate_random_coordinate_Dipole(
+        map_length, r_max_grid, data_num, nummax)  # (data_num,9,2)
+    # 生成球体参数
+    parameters_n_of_hr = generate_parameters_of_Dipole(
+        r_max, h_max, data_num, Rfrequency, Hfrequency, nummax)  # (i,2) h,r
+    # 生成
+    num_of_dipoles = np.random.randint(8, size=data_num) + 1
+
+    parameter = np.concatenate(
+        (parameters_n_of_xy, parameters_n_of_hr), axis=2)  # xyhr
+    parameter = np.round(parameter, 2)
+    bbox = np.zeros((data_num, nummax, 4))
+    for i in range(data_num):
+        for j in range(num_of_dipoles[i]):
+            x, y, r, h = parameter[i, j]
+            tem_data = Dipole(map_length, zmax, x, y, h, r)
+            ano = tem_data.F
+            bbox[i, j] = tem_data.YOLO_box()
+            datas[i] = datas[i] + ano
+
+    return parameter, num_of_dipoles, bbox, datas
 
 
-def X_array(N_dipoles_f, N_parameters_f, X_data_pad, bbox, h_array, new_size):
-
-    N_lat = X_data_pad.shape[0]
-    n_examples = X_data_pad.shape[1]
-    # border_yolo = int((416-zmax)/2)
-
-    ##########################
-
+def X_array(datas, map_lenght=25, new_size=416):
+    zmax = datas.shape[1]
+    pixel_to_real = ((map_lenght*2)/zmax)
+    real_to_pixel = zmax/(map_lenght*2)
     conversion = (2*map_lenght)/zmax
-
     yolo_conversion = (new_size/zmax)
-
-    ##########################
-
-    dist_min = dist_min_i / conversion
-
-    ##########################
-
-    X_data = np.zeros((N_lat, N_dipoles, n_examples, new_size, new_size))
-    Position = np.zeros((N_lat, N_dipoles, n_examples, N_dipoles*2))
-    bbox_f = np.zeros((N_lat, N_dipoles, n_examples, 5*N_dipoles))
-    lat_f = np.zeros((N_lat, N_dipoles, n_examples, 1))
-
     No_pad_left = int((zmax) - zmax/2)
     No_pad_right = int((zmax) + zmax/2)
+    ##########################
 
-    Position_array_to_add = np.zeros((N_lat, N_dipoles, n_examples, 2))
+    ##########################
+    n_examples = datas.shape[0]
+    X_data = np.zeros((n_examples, new_size, new_size))
 
-    w_in = 1
+    border_o = int((zmax)/2)
 
-    w_ch = 0
-    h_ch = 0
-
-    limit = (zmax/2) - 1
-
+    # data变换大小
     for i_n_examples in range(n_examples):
+        img = datas[i_n_examples, :, :]
+        X_data_padded = cv2.copyMakeBorder(
+            img, border_o, border_o, border_o, border_o, 0)
+        X_array_os = X_data_padded[No_pad_left:No_pad_right,
+                                   No_pad_left:No_pad_right]
+        X_array_yolo = cv2.resize(
+            X_array_os, (new_size, new_size), interpolation=cv2.INTER_CUBIC)
+        X_data[i_n_examples, :, :] = X_array_yolo
+        ##########################
 
-        dist_min_f = int(5 + (h_idx[i_n_examples]*1.5))
+    # 变换bbox
 
-        if n_dipoles_i == 0:
+    return X_data
 
-            ##########################
 
-            position_x = random.randint(-limit, limit)
-            position_y = random.randint(-limit, limit)
+def Plot_X_data(num_of_dipoles, bbox, datas, map_lenght=25, num=2):
 
-            Position_array_to_add[i_lat, n_dipoles_i,
-                                  i_n_examples, 0] = position_x + zmax/2
-            Position_array_to_add[i_lat, n_dipoles_i,
-                                  i_n_examples, 1] = position_y + zmax/2
+    n_examples = datas.shape[0]
+    zmax = datas.shape[1]
 
-            ##########################
+    pixel_to_real = ((map_lenght*2)/zmax)
+    real_to_pixel = zmax/(map_lenght*2)
 
-            rot_n = random.choice(rotation)
+    X = np.linspace(-map_lenght, map_lenght, zmax)
+    Y = np.linspace(-map_lenght, map_lenght, zmax)
 
-            if (i_lat == 3):
+    rows, cols = 1, num
+    height_2 = 14
+    width_2 = 8
+    fig, axs = plt.subplots(rows, cols, figsize=(height_2, width_2))
+    # fig.subplots_adjust(hspace = 0, wspace=0)
 
-                rot_n = 0
+    axs = axs.ravel()
+    examples = np.random.randint(n_examples, size=num)
 
-            elif (i_lat == 0) and rot_n >= 180:
+    for lat_i in range(num):
+        rect_real = []
+        rect_pixel = []
+        example = examples[lat_i]
+        for n_ii in range(num_of_dipoles[example]):
 
-                rot_n = rot_n - 180
+            x0, y0, bwidth, bheight = (bbox[example, n_ii]) * real_to_pixel
+            rect_pixel.append(Rectangle((x0, y0), bwidth,
+                                        bheight, edgecolor='r', facecolor="none"))
 
-            img = X_data_pad[i_lat, i_n_examples, :, :]
+            x0_2, y0_2, bwidth_2, bheight_2 = (bbox[example, n_ii])
 
-            X_array_rot = ndimage.rotate(
-                img, rot_n, axes=(0, 1), reshape=False)
+            print(
+                f"Dipole_{n_ii}: x0: {np.round(x0_2,1)}, y0: {np.round(y0_2,1)}, w: {round(bwidth_2,1)}, h:{round(bheight_2,1)}")
 
-            X_data_padded = cv2.copyMakeBorder(
-                X_array_rot, border_o, border_o, border_o, border_o, 0)
+            rect_real.append(Rectangle((x0_2, y0_2), bwidth_2,
+                                       bheight_2, edgecolor='r', facecolor="none"))
 
-            X_data_x = np.roll(X_data_padded, position_x, axis=1)
-            X_data_y = np.roll(X_data_x, position_y, axis=0)
+        axs[lat_i].contourf(X, Y, datas[example, :, :],
+                            levels=18, cmap='seismic')
+        axs[lat_i].set_xlabel('Position X (m)')
+        axs[lat_i].set_ylabel('Position Y (m)')
+        axs[lat_i].set_xticks(np.arange(-25, 25, step=2))
+        axs[lat_i].set_yticks(np.arange(-25, 25, step=2))
+        for n_iii in range(num_of_dipoles[example]):
+            axs[lat_i].add_patch(rect_real[n_iii])
 
-            X_array_os = X_data_y[No_pad_left:No_pad_right,
-                                  No_pad_left:No_pad_right]
+        title = 'test'
+        axs[lat_i].set_title(f'Latitude = {title}°')
 
-            X_array_yolo = cv2.resize(
-                X_array_os, (new_size, new_size), interpolation=cv2.INTER_CUBIC)
+    plt.tight_layout()
 
-            X_data[i_lat, n_dipoles_i,
-                   i_n_examples, :, :] = X_array_yolo
 
-            ##########################
+def add_gaussian_noise(X_data_array, mean=0, var=0.1, n_models_with_noise=100, seed=76):
+    sigma = var ** 0.5
+    zmax = X_data_array.shape[1]
+    nummax = X_data_array.shape[0]
+    np.random.seed(seed)
 
-            Position[i_lat, n_dipoles_i:, i_n_examples, (n_dipoles_i)*2:(n_dipoles_i+1)*2] = np.round(
-                Position_array_to_add[i_lat, n_dipoles_i, i_n_examples, :] * yolo_conversion, 0)
+    add_noise_id = np.random.choice(
+        nummax, size=n_models_with_noise, replace=False)
 
-            ##########################
+    for i_noise_models in range(n_models_with_noise):
 
-            # Box latitude
-            bbox_f[i_lat, n_dipoles_i:, i_n_examples,
-                   0 + (5*n_dipoles_i)] = int(i_lat)
+        m = add_noise_id[i_noise_models]
 
-            # Box conditions
-            x_o = ((bbox[i_lat, np.where(rotation == rot_n)[
-                    0][0], i_n_examples, 0]) + position_x) * yolo_conversion
-            y_o = ((bbox[i_lat, np.where(rotation == rot_n)[
-                    0][0], i_n_examples, 1]) + position_y) * yolo_conversion
-            w_o = bbox[i_lat, np.where(rotation == rot_n)[
-                0][0], i_n_examples, 2] * yolo_conversion
-            h_o = bbox[i_lat, np.where(rotation == rot_n)[
-                0][0], i_n_examples, 3] * yolo_conversion
+        if (0 < np.max(X_data_array[m, :, :])) and (np.max(X_data_array[m, :, :]) < 10):
 
-            limit_yolo = zmax * yolo_conversion
+            var = 0.01
 
-            # condition 1
-            if (x_o < 0) and (y_o < 0) and (x_o+w_o <= limit_yolo) and (y_o+h_o > 0):
-                x = 0
-                y = 0
-                w_ch = -x_o
-                h_ch = -y_o
-            # Condition 2
-            elif (x_o >= 0) and (y_o < 0) and (x_o+w_o <= limit_yolo) and (y_o+h_o <= limit_yolo):
-                x = x_o
-                y = 0
-                w_ch = 0
-                h_ch = -y_o
+        elif (-10 < np.min(X_data_array[m, :, :])) and (np.min(X_data_array[m, :, :]) < 0):
 
-            # Condition 3
-            elif (x_o >= 0) and (y_o < 0) and (x_o+w_o > limit_yolo) and (y_o+h_o <= limit_yolo):
-                x = x_o
-                y = 0
-                w_ch = (x_o+w_o) - limit_yolo
-                h_ch = -y_o
+            var = 0.01
 
-            # Condition 4
-            elif (x_o >= 0) and (y_o >= 0) and (x_o+w_o > limit_yolo) and (y_o+h_o <= limit_yolo):
-                x = x_o
-                y = y_o
-                w_ch = (x_o+w_o) - limit_yolo
-                h_ch = 0
+        elif (10 < np.max(X_data_array[m, :, :])) and (np.max(X_data_array[m, :, :]) < 100):
 
-            # Condition 5
-            elif (x_o >= 0) and (y_o >= 0) and (x_o+w_o > limit_yolo) and (y_o+h_o > limit_yolo):
-                x = x_o
-                y = y_o
-                w_ch = (x_o+w_o) - limit_yolo
-                h_ch = (y_o+h_o) - limit_yolo
+            var = 1
 
-            # Condition 6
-            elif (x_o >= 0) and (y_o >= 0) and (x_o+w_o <= limit_yolo) and (y_o+h_o > limit_yolo):
-                x = x_o
-                y = y_o
-                w_ch = 0
-                h_ch = (y_o+h_o) - limit_yolo
+        elif (-100 < np.min(X_data_array[m, :, :])) and (np.min(X_data_array[m, :, :]) < -10):
 
-            # Condition 7
-            elif (x_o < 0) and (y_o >= 0) and (x_o+w_o <= limit_yolo) and (y_o+h_o > limit_yolo):
-                x = 0
-                y = y_o
-                w_ch = -x_o
-                h_ch = (y_o+h_o) - limit_yolo
+            var = 1
 
-            # Condition 8:
-            elif (x_o < 0) and (y_o >= 0) and (x_o+w_o <= limit_yolo) and (y_o+h_o <= limit_yolo):
-                x = 0
-                y = y_o
-                w_ch = -x_o
-                h_ch = 0
+        elif (100 < np.max(X_data_array[m, :, :])) and (np.max(X_data_array[m, :, :]) < 1000):
 
-            else:
-                x = x_o
-                y = y_o
-                w_ch = 0
-                h_ch = 0
+            var = 5
 
-            bbox_f[i_lat, n_dipoles_i:, i_n_examples,
-                   1 + (5*n_dipoles_i)] = x
-            bbox_f[i_lat, n_dipoles_i:, i_n_examples,
-                   2 + (5*n_dipoles_i)] = y
-            bbox_f[i_lat, n_dipoles_i:, i_n_examples,
-                   3 + (5*n_dipoles_i)] = w_o - w_ch
-            bbox_f[i_lat, n_dipoles_i:, i_n_examples,
-                   4 + (5*n_dipoles_i)] = h_o - h_ch
+        elif (-1000 < np.min(X_data_array[m, :, :])) and (np.min(X_data_array[m, :, :]) < -100):
+
+            var = 5
 
         else:
+            var = 10
 
-            while w_in == 1:
+        sigma = var ** 0.5
 
-                in_a = 0
+        gaussian = np.random.normal(mean, sigma, (zmax, zmax))
+        X_data_array[m] = X_data_array[m] + gaussian
+    return add_noise_id
 
-                position_x = random.randint(-limit, limit)
-                position_y = random.randint(-limit, limit)
 
-                X_c = (
-                    (position_x) - (Position_array_to_add[i_lat, :, i_n_examples, 0] - zmax/2))
+def Plot_X_data_with_noise(num_of_dipoles, bbox, datas, with_noise_id, map_lenght=25, num=2):
 
-                Y_c = (
-                    (position_y) - (Position_array_to_add[i_lat, :, i_n_examples, 1] - zmax/2))
+    n_examples = with_noise_id.shape[0]
+    zmax = datas.shape[1]
 
-                distance = np.sqrt(X_c**2 + Y_c**2)
+    pixel_to_real = ((map_lenght*2)/zmax)
+    real_to_pixel = zmax/(map_lenght*2)
 
-                if np.all(dist_min < distance):
+    X = np.linspace(-map_lenght, map_lenght, zmax)
+    Y = np.linspace(-map_lenght, map_lenght, zmax)
 
-                    break
+    rows, cols = 1, num
+    height_2 = 14
+    width_2 = 8
+    fig, axs = plt.subplots(rows, cols, figsize=(height_2, width_2))
+    # fig.subplots_adjust(hspace = 0, wspace=0)
 
-                else:
+    axs = axs.ravel()
+    examples = np.random.choice(n_examples, size=num, replace=False)
 
-                    if in_a > 150:
+    for lat_i in range(num):
+        rect_real = []
+        rect_pixel = []
+        example = with_noise_id[examples[lat_i]]
+        for n_ii in range(num_of_dipoles[example]):
 
-                        print("Looping forever?")
+            x0, y0, bwidth, bheight = (bbox[example, n_ii]) * real_to_pixel
+            rect_pixel.append(Rectangle((x0, y0), bwidth,
+                                        bheight, edgecolor='r', facecolor="none"))
 
-                    in_a += 1
+            x0_2, y0_2, bwidth_2, bheight_2 = (bbox[example, n_ii])
 
-                    continue
+            print(
+                f"Dipole_{n_ii}: x0: {np.round(x0_2,1)}, y0: {np.round(y0_2,1)}, w: {round(bwidth_2,1)}, h:{round(bheight_2,1)}")
 
-            Position_array_to_add[i_lat, n_dipoles_i,
-                                  i_n_examples, 0] = position_x + zmax/2
-            Position_array_to_add[i_lat, n_dipoles_i,
-                                  i_n_examples, 1] = position_y + zmax/2
+            rect_real.append(Rectangle((x0_2, y0_2), bwidth_2,
+                                       bheight_2, edgecolor='r', facecolor="none"))
 
-            ##########################
+        test = axs[lat_i].contourf(X, Y, datas[example, :, :],
+                                   levels=50, cmap='gray')
+        plt.colorbar(test, ax=axs[lat_i])
+        axs[lat_i].set_xlabel('Position X (m)')
+        axs[lat_i].set_ylabel('Position Y (m)')
+        axs[lat_i].set_xticks(np.arange(-25, 25, step=2))
+        axs[lat_i].set_yticks(np.arange(-25, 25, step=2))
+        for n_iii in range(num_of_dipoles[example]):
+            axs[lat_i].add_patch(rect_real[n_iii])
 
-            if i_lat == 3:
+        title = 'test'
+        axs[lat_i].set_title(f'Latitude = {title}°')
 
-                rot_n = 0
+    plt.tight_layout()
+
+
+new_size = 416
+IMG_size = (new_size, new_size)
+
+
+def convert_to_YOLO(
+        num_of_dipoles, bbox, X_data_array, root_dir=None, map_length=25):
+    num_of_datas = X_data_array.shape[0]
+    X_array_data = X_data_array.reshape(
+        X_data_array.shape[0], X_data_array.shape[1], X_data_array.shape[2], 1)
+    length = int(map_length*2)
+    bbox[:, :, 0] = bbox[:, :, 0]+bbox[:, :, 2]/2 + map_length
+    bbox[:, :, 1] = bbox[:, :, 1]+bbox[:, :, 3]/2 + map_length
+
+    YOLO_box = bbox/length
+    if root_dir is None:
+        root_dir = '/home/jiajianhao/文档/cnn/my_Magnetic_methods-master/data/YOLOv8'  # type: ignore
+    n1 = int(num_of_datas*0.7)
+    n2 = int(num_of_datas*0.95)
+    for bb_n_models in range(num_of_datas):
+        if bb_n_models < n1:
+            flag = "train"
+            dir_name = f'{root_dir}/{flag}'
+            os.chdir(dir_name)
+        elif bb_n_models < n2:
+            flag = "val"
+            dir_name = f'{root_dir}/{flag}'
+            os.chdir(dir_name)
+        else:
+            flag = "test"
+            dir_name = f'{root_dir}/{flag}'
+            os.chdir(dir_name)
+        # Normalize between 0 - 1
+
+        image = (X_array_data[bb_n_models, :, :, :] - np.min(X_array_data[bb_n_models, :, :, :])) / (
+            np.max(X_array_data[bb_n_models, :, :, :]) - np.min(X_array_data[bb_n_models, :, :, :]))
+
+        # Converting to rgb
+
+        image_t = np.uint8(image * 255)
+        image_t = cv2.cvtColor(image_t, cv2.COLOR_GRAY2RGB)  # type: ignore
+
+        # Saving image
+
+        im = Image.fromarray(image_t)
+        im.convert('RGB').save(f"{flag}_{bb_n_models+1}.jpg")
+
+        for bb_n_dipoles in range(num_of_dipoles[bb_n_models]):
+
+            if bb_n_dipoles == 0:
+
+                with open(f"{flag}_{bb_n_models+1}.txt", "w") as f:
+
+                    f.write('0' + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 0]) + ' ' + str(
+                        YOLO_box[bb_n_models, bb_n_dipoles, 1]) + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 2]) + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 3]))
 
             else:
-
-                rot_n = random.choice(rotation)
-
-            # new_example = np.random.randint(n_examples)
-
-            img = X_data_pad[i_lat, i_n_examples, :, :]
-
-            X_array_rot = ndimage.rotate(
-                img, rot_n, axes=(0, 1), reshape=False)
-
-            X_data_padded = cv2.copyMakeBorder(
-                X_array_rot, border_o, border_o, border_o, border_o, 0)
-
-            X_data_x = np.roll(X_data_padded, position_x, axis=1)
-            X_data_y = np.roll(X_data_x, position_y, axis=0)
-
-            X_array_os = X_data_y[No_pad_left:No_pad_right,
-                                  No_pad_left:No_pad_right]
-
-            X_array_yolo = cv2.resize(
-                X_array_os, (new_size, new_size), interpolation=cv2.INTER_CUBIC)
-
-            X_data[i_lat, n_dipoles_i, i_n_examples, :, :] = X_data[i_lat,
-                                                                    n_dipoles_i-1, i_n_examples, :, :] + X_array_yolo
-
-    return X_data, Position, bbox_f, lat_f
-
-
-def img_to_matrix(data):
-    pass
+                with open(f"{flag}_{bb_n_models+1}.txt", "a") as f:
+                    f.write('\n' + '0' + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 0]) + ' ' + str(
+                        YOLO_box[bb_n_models, bb_n_dipoles, 1]) + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 2]) + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 3]))
 
 
 if __name__ == '__main__':
