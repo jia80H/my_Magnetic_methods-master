@@ -1,3 +1,5 @@
+from cProfile import label
+import dis
 import os
 from scipy import ndimage
 from PIL import Image
@@ -5,13 +7,6 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
-# 设置默认字体为黑体
-plt.rcParams['font.family'] = ['WenQuanYi Zen Hei']  # 黑体
-# 或者设置能够支持中文的其他字体名称
-# plt.rcParams['font.family'] = ['SimSun']  # 宋体
-
-# 对于负号显示问题，确保正常显示
-plt.rcParams['axes.unicode_minus'] = False
 
 
 class MyModels(object):
@@ -34,14 +29,18 @@ class Ellipse(MyModels):
     miu_0 = 4 * np.pi * (1e-7)  # μ0为真空磁导率
     pi = np.pi
 
-    def __init__(self, map_length=25, zmax=100, a=0.4, b=0.1, c=0.1,
-                 gama=90.0, theta=0.0, phi=-5.0, x=0, y=0, z=1.5, b_0=55000.0, I=70.0, D=3.5) -> None:
+    def __init__(
+            self, map_length=25, zmax=100,
+            x=0, y=0, h=1.5, a=0.4, b=0.1, c=0.1, e=4,
+            gama=90.0, theta=0.0, phi=-5.0,
+            b_0=55000.0, I=70.0, D=3.5,
+            *args, **kwargs) -> None:
 
         self.map_length = map_length
         self.zmax = zmax
         self.X = np.linspace(-map_length, map_length, zmax)  # 0,1,...x
         self.Y = np.linspace(-map_length, map_length, zmax)
-        self.center = [x, y, z]  # 中心点坐标
+        self.center = [x, y, h]  # 中心点坐标
         self.axis = [a, b, c]  # 三个轴长 a> b > c
         self.D = np.radians(D)  # 磁偏角
         self.Latitude = I
@@ -50,9 +49,7 @@ class Ellipse(MyModels):
         self.b_0 = b_0
         self.B_0 = self.__dicichang()
 
-        if b == c:
-            self.axis = [a, b, b]
-            self.e = a/b  # 横纵轴比
+        self.e = e  # 横纵轴比
         # 椭球的方向
         self.gama = gama
         self.theta = theta
@@ -216,8 +213,11 @@ class Dipole(MyModels):
     pi = np.pi
     ksi = 0.1
 
-    def __init__(self, map_length=25, zmax=100, x=0, y=0, h=1, r=0.1, Latitudes=70,
-                 H_capteur_bas=0, h_capteur_haut=1):
+    def __init__(
+            self, map_length=25, zmax=100, x=0,
+            y=0, h=1, r=0.1, Latitudes=70,
+            H_capteur_bas=0, h_capteur_haut=1,
+            *args, **kwargs):
         self.map_length = map_length
         self.zmax = zmax
         self.x = x
@@ -435,12 +435,39 @@ class Dipole(MyModels):
 
 
 kind = [Dipole, Ellipse]
+Property = [0.5, 0.5]
+
+# [a,b,c]取值范围为[a,b) frequency=c
+par_of_dipole = [
+    [1, 1.8, 0.2],  # hmin hmax hf
+    [0.1, 0.18, 0.02],  # rmin rmax rf
+]
+
+
+par_of_ellipse = [
+    [1, 1.8, 0.2],  # hmin hmax hf
+    [0.07, 0.15, 0.02],  # b   # 椭圆使用的参数
+    [0.07, 0.15, 0.02],  # b   # 椭圆使用的参数
+    [0.07, 0.15, 0.02],  # b   # 椭圆使用的参数
+    [0, 180, 30],  # gamma
+    [0, 180, 30],  # theta
+    [0, 180, 30]   # phi
+]  # e = a/b 为1.5^3 3.375
+e_of_E = 2  # 炮弹常见e 为 1.5-3
+
+list_of_par = [par_of_dipole, par_of_ellipse]
+
+
+def generate_np_array(lis):
+    return np.arange(lis[0], lis[1], lis[2])
+
+# 生成参数
 
 
 def generate_parameters_of_Dipole(
         r_max=0.18, h_max=1.8,
         data_num=4096, Rfrequency=0.02, Hfrequency=0.2, nummax=9, seed=56):
-    """ 
+    """
     返回一个Parameters_array,包含h倍率,r倍率的所有排列组合
     Parameters_array[i,:]为第i个
     """
@@ -473,51 +500,72 @@ def generate_parameters_of_Dipole(
     return Parameters_array_of_all
 
 
-def generate_parameters_of_(
-        r_max=0.18, h_max=1.8,
-        data_num=4096, Rfrequency=0.02, Hfrequency=0.2, nummax=9, seed=56):
-    """ 
-    返回一个Parameters_array,包含h倍率,r倍率的所有排列组合
-    Parameters_array[i,:]为第i个
+def generate_parameters_of_mix(
+        kind_of_data, data_num=4096,
+        nummax=9, seed=56, list_of_par=list_of_par):
     """
-    r_min = 0.1
-    r_max = r_max
-    r_array = np.arange(r_min, r_max, Rfrequency)
-    h_min = 1
-    h_max = h_max
-    h_array = np.arange(h_min, h_max, Hfrequency)
+    kind_of_data [data_num,nummax]  = 0 表示球  ; 1 表示椭球
+    返回一个Parameters_array,(data_num, nummax, n)
+    包含生成的模型的所有参数,n表示单个模型参数数量
+    其中n的第一个参数表示种类,后边按照原始参数顺序随机生成各参数
+    如果固定椭球e, a b c 请仅使用一个即仅使用(data_num, nummax,1or2or3)
+    """
+    global e_of_E
+    para_of_dipole = []
+    para_of_ellipse = []
+    lis_of_para = [
+        para_of_dipole,
+        para_of_ellipse
+    ]
 
-    n_examples = r_array.shape[0] * h_array.shape[0]
+    # 生成array
+    for i in range(len(list_of_par)):
+        for j in range(len(list_of_par[i])):
+            para = list_of_par[i][j]
+            para_array = generate_np_array(para)
+            lis_of_para[i].append(para_array)
 
-    Parameters_array = np.zeros((n_examples, 2))
+    n = len(list_of_par[1])
+    Parameters_array = np.zeros((data_num, nummax, n))
 
-    i_p = 0
-
-    for i_r in r_array:
-        for i_h in h_array:
-            Parameters_array[i_p, 0] = i_r
-            Parameters_array[i_p, 1] = i_h
-            i_p += 1
-    num_of_rh = Parameters_array.shape[0]
     np.random.seed(seed)
-    n = np.random.randint(num_of_rh, size=(data_num, nummax))
-    Parameters_array_of_all = np.zeros((data_num, nummax, 2))
     for i in range(data_num):
         for j in range(nummax):
-            Parameters_array_of_all[i, j, :] = Parameters_array[n[i, j]]
+            kind = kind_of_data[i, j]
+            parameter = np.zeros(n)
+            args = lis_of_para[kind]
+            for m in range(len(args)):
+                parameter[m] = np.random.choice(args[m])
 
-    return Parameters_array_of_all
+            # 正确处理椭球参数
+            if kind == 1:
+                parameter[1] = parameter[2]*e_of_E
+                parameter[3] = parameter[2]
+
+            Parameters_array[i, j] = parameter
+
+    return Parameters_array
+
+# 生成坐标
 
 
 def generate_random_coordinate_Dipole(
-        map_length=25, rmax_grid=0.2, data_num=4096, nummax=9, rondom_seed=43):
+        map_length=25, rmax_grid=0.2, data_num=4096, nummax=9, rondom_seed=453):
+    """
+    返回随机不重复(data_num,nummax,2)np数组,代表随机坐标
+    """
     np.random.seed(rondom_seed)
     L = rmax_grid * 2
     X = np.arange(-map_length, map_length, L)
-    coordinate = np.random.choice(X, size=(data_num, nummax, 2))
+    coordinate = np.zeros((data_num, nummax, 2))
+    # coordinate = np.random.choice(X, size=(data_num, nummax, 2))
+    for i in range(data_num):
+        coordinate[i] = np.random.choice(X, size=(nummax, 2), replace=False)
+
     return coordinate
 
 
+# 生成数据
 def generate_random_muti_dipole(
         r_max=0.18, h_max=1.8, Hfrequency=0.2, Rfrequency=0.02,
         map_length=25, r_max_grid=0.2,
@@ -550,40 +598,56 @@ def generate_random_muti_dipole(
 
 
 def generate_random_muti_mix_data(
-        r_max=0.18, h_max=1.8, Hfrequency=0.2, Rfrequency=0.02,
-        map_length=25, r_max_grid=0.2,
-        nummax=9, data_num=4096, seed=43, zmax=100):
+        map_length=25, nummax=9, data_num=4096,
+        seed=43, zmax=100, property=Property):
     """
     返回parameters, num_of_dipoles, data
     """
-    global kind
+    global kind, e_of_E, list_of_par
     np.random.seed(seed)
     datas = np.zeros([data_num, zmax, zmax])
-    # 生成坐标参数
-    parameters_n_of_xy = generate_random_coordinate_Dipole(
-        map_length, r_max_grid, data_num, nummax)  # (data_num,9,2)
-    # 生成球体参数
-    parameters_n_of_hr = generate_parameters_of_Dipole(
-        r_max, h_max, data_num, Rfrequency, Hfrequency, nummax)  # (i,2) h,r
-    # 生成
+    # 生成一张图几个物体
     num_of_dipoles = np.random.randint(8, size=data_num) + 1
+    # 生成一张图分别是什么物体
+    seed = np.random.randint(1000)+10
+    np.random.seed(seed)
+    kind_of_data = np.random.choice(
+        len(kind), size=(data_num, nummax), p=property)
+
+    # 生成坐标参数
+    max_b = list_of_par[1][2][1]
+    r_max_grid = max_b*e_of_E    # 调整坐标间距
+    seed = np.random.randint(1000)+45
+    parameters_n_of_xy = generate_random_coordinate_Dipole(
+        map_length, r_max_grid, data_num, nummax, seed)  # (data_num,9,2)
+    # 生成每个物体参数  控制参数在外部
+    seed = np.random.randint(1000)+76
+    parameters_n_of_mix = generate_parameters_of_mix(
+        kind_of_data, data_num, nummax, seed)  # (i,2) h,r
 
     parameter = np.concatenate(
-        (parameters_n_of_xy, parameters_n_of_hr), axis=2)  # xyhr
-    parameter = np.round(parameter, 2)
+        (parameters_n_of_xy, parameters_n_of_mix), axis=2)  # x,y,h,r
+
     bbox = np.zeros((data_num, nummax, 4))
+
     for i in range(data_num):
         for j in range(num_of_dipoles[i]):
-            x, y, r, h = parameter[i, j]
-            tem_data = Dipole(map_length, zmax, x, y, h, r)
+            x, y, h, a, b, c, gama, theta, phi = parameter[i, j]  # 参数列表
+            # 椭圆长轴长
+            tem_data = kind[kind_of_data[i, j]](
+                map_length=map_length, zmax=zmax,  # 通用参数
+                x=x, y=y, h=h, r=a,  # 位置参数及球的所有参数
+                a=a, b=b, c=b, e=e_of_E,
+                gama=gama, theta=theta, phi=phi  # 椭球所有参数
+            )
             ano = tem_data.F
             bbox[i, j] = tem_data.YOLO_box()
             datas[i] = datas[i] + ano
 
-    return parameter, num_of_dipoles, bbox, datas
+    return parameter, num_of_dipoles, kind_of_data, bbox, datas
 
 
-def X_array(datas, map_lenght=25, new_size=416):
+def X_array_reship(datas, map_lenght=25, new_size=416):
     zmax = datas.shape[1]
     pixel_to_real = ((map_lenght*2)/zmax)
     real_to_pixel = zmax/(map_lenght*2)
@@ -788,16 +852,25 @@ def convert_to_YOLO(
         root_dir = '/home/jiajianhao/文档/cnn/my_Magnetic_methods-master/data/YOLOv8'  # type: ignore
     n1 = int(num_of_datas*0.7)
     n2 = int(num_of_datas*0.95)
+    count1 = 0
+    count2 = 0
+    count3 = 0
     for bb_n_models in range(num_of_datas):
         if bb_n_models < n1:
+            count1 += 1
+            count = count1
             flag = "train"
             dir_name = f'{root_dir}/{flag}'
             os.chdir(dir_name)
         elif bb_n_models < n2:
+            count2 += 1
+            count = count2
             flag = "val"
             dir_name = f'{root_dir}/{flag}'
             os.chdir(dir_name)
         else:
+            count3 += 1
+            count = count3
             flag = "test"
             dir_name = f'{root_dir}/{flag}'
             os.chdir(dir_name)
@@ -814,21 +887,159 @@ def convert_to_YOLO(
         # Saving image
 
         im = Image.fromarray(image_t)
-        im.convert('RGB').save(f"{flag}_{bb_n_models+1}.jpg")
+        im.convert('RGB').save(f"{flag}_{count}.jpg")
 
         for bb_n_dipoles in range(num_of_dipoles[bb_n_models]):
 
             if bb_n_dipoles == 0:
 
-                with open(f"{flag}_{bb_n_models+1}.txt", "w") as f:
+                with open(f"{flag}_{count}.txt", "w") as f:
 
                     f.write('0' + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 0]) + ' ' + str(
                         YOLO_box[bb_n_models, bb_n_dipoles, 1]) + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 2]) + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 3]))
 
             else:
-                with open(f"{flag}_{bb_n_models+1}.txt", "a") as f:
+                with open(f"{flag}_{count}.txt", "a") as f:
                     f.write('\n' + '0' + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 0]) + ' ' + str(
                         YOLO_box[bb_n_models, bb_n_dipoles, 1]) + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 2]) + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 3]))
+
+
+# 古早版本 留作参考
+# def mapping_rgb(num):
+#     rgb = np.zeros(3, dtype=np.float64)  # 0:r 1:g 2:b
+#     col_num = 1279  # 5*256-1
+#     if 0 <= num < 0.2:
+#         rgb[0] = 255 - col_num*num
+#         rgb[2] = 255
+#     elif 0.2 <= num < 0.4:
+#         num = num-0.2
+#         rgb[1] = col_num*num
+#         rgb[2] = 255
+
+#     elif 0.4 <= num < 0.6:
+#         num = num-0.4
+#         rgb[1] = 255
+#         rgb[2] = 255-col_num*num
+#     elif 0.6 <= num < 0.8:
+#         num = num-0.6
+#         rgb[1] = 255
+#         rgb[0] = col_num*num
+#     else:
+#         num = num-0.8
+#         rgb[0] = 255
+#         rgb[1] = 255-col_num*num
+#     r, g, b = rgb
+
+#     return r*256*256 + g*256 + b
+
+
+def map_rgb(data):
+    """
+    对正则化后的数据进行rgb映射
+    """
+    zeros_data = np.zeros_like(data)
+    N, width, hight = data.shape
+
+    # 取余填值
+    RGB = ((data % 0.2)*5*255).astype(np.uint8)
+    RGB2 = (255 - RGB).astype(np.uint8)
+    FullRGB = np.ones_like(RGB)*255
+    R = np.zeros_like(RGB)
+    G = np.zeros_like(RGB)
+    B = np.zeros_like(RGB)
+
+    print(RGB2.shape)
+    # 取整分段
+    labels = data//0.2
+    mask0 = (labels == 0)
+    mask1 = (labels == 1)
+    mask2 = (labels == 2)
+    mask3 = (labels == 3)
+    mask4 = (labels == 4)
+    all_mask = [mask0, mask1, mask2, mask3, mask4]
+
+    R[all_mask[0]] = RGB2[all_mask[0]]  # 255-0
+    # G此时为0,无需改变,下面同理
+    B[all_mask[0]] = FullRGB[all_mask[0]]  # 255
+
+    G[all_mask[1]] = RGB[all_mask[1]]  # 0-255
+    B[all_mask[1]] = FullRGB[all_mask[1]]  # 255
+
+    G[all_mask[2]] = FullRGB[all_mask[2]]  # 255
+    B[all_mask[2]] = RGB2[all_mask[2]]  # 255-0
+
+    R[all_mask[3]] = RGB[all_mask[3]]  # 0-255
+    G[all_mask[3]] = FullRGB[all_mask[3]]  # 255
+
+    R[all_mask[4]] = FullRGB[all_mask[4]]  # 255
+    G[all_mask[4]] = RGB2[all_mask[4]]  # 255-0
+
+    data_RGB = np.stack((R, G, B), axis=-1)
+    return data_RGB
+
+
+def convert_to_YOLO_mix(
+        num_of_dipoles, bbox, X_data_array, root_dir=None, map_length=25):
+    num_of_datas, imgsize = X_data_array.shape[:2]
+    # rgb_num = 16777215  # RGBnum 2^8^3-1
+
+    # 预处理
+    # box转yolo格式
+    length = int(map_length*2)
+    bbox[:, :, 0] = bbox[:, :, 0]+bbox[:, :, 2]/2 + map_length
+    bbox[:, :, 1] = bbox[:, :, 1]+bbox[:, :, 3]/2 + map_length
+    YOLO_box = bbox/length
+
+    # 归一化
+    X_data_array_norm = np.zeros_like(X_data_array)
+    for i in range(num_of_datas):
+        X_data_array_norm[i] = (X_data_array[i] - np.min(X_data_array[i])) / (
+            np.max(X_data_array[i]) - np.min(X_data_array[i]))
+
+    # 转rgb
+    dataRGB = map_rgb(X_data_array_norm)
+    # 如果不存在则创建文件夹,包含 train,val,test
+    if root_dir is None:
+        root_dir = "/home/jiajianhao/文档/cnn/my_Magnetic_methods-master/data/YOLOv8"  # type: ignore
+    if not os.path.exists(root_dir):
+        os.mkdir(root_dir)
+        os.mkdir(f'{root_dir}/train')
+        os.mkdir(f'{root_dir}/val')
+        os.mkdir(f'{root_dir}/test')
+
+    n1 = int(num_of_datas*0.7)
+    n2 = int(num_of_datas*0.95)
+    flags = ["train", "val", "test"]  # 数据前缀
+    n_each_flag = [0, n1, n2, num_of_datas]  # 数据大小
+    count_each = [0, 0, 0]  # 数据名后缀
+
+    for f_num in range(len(flags)):
+        flag = flags[f_num]
+        dir_name = f'{root_dir}/{flag}'
+        Start = n_each_flag[f_num]
+        End = n_each_flag[f_num+1]
+        os.chdir(dir_name)
+        for bb_n_models in range(Start, End):
+            count_each[f_num] += 1
+            count = count_each[f_num]
+
+            color_mapped_bgr = cv2.cvtColor(
+                dataRGB[bb_n_models], cv2.COLOR_RGB2BGR)
+
+            cv2.imwrite(f"{flag}_{count}.jpg", color_mapped_bgr)
+
+            for bb_n_dipoles in range(num_of_dipoles[bb_n_models]):
+
+                if bb_n_dipoles == 0:
+
+                    with open(f"{flag}_{count}.txt", "w") as f:
+                        f.write('0' + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 0]) + ' ' + str(
+                            YOLO_box[bb_n_models, bb_n_dipoles, 1]) + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 2]) + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 3]))
+
+                else:
+                    with open(f"{flag}_{count}.txt", "a") as f:
+                        f.write('\n' + '0' + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 0]) + ' ' + str(
+                            YOLO_box[bb_n_models, bb_n_dipoles, 1]) + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 2]) + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 3]))
 
 
 if __name__ == '__main__':
