@@ -203,8 +203,75 @@ class Ellipse(MyModels):
         plt.show()
 
     def YOLO_box(self):
-        self.G = self.gradient(self.F)
-        self.GG = self.gradient(self.G)
+        """
+        根据给定的参数生成一个包含多个异常的边界框。
+
+        参数：
+        N_latitudes (int): 纬度的个数。
+        n_examples (int): 异常的个数。
+        h_array (ndarray): 每个纬度上异常的高度数组。
+        map_length (float): 地图的长度。
+        zmax (float): 深度的最大值。
+
+        """
+
+        # 这个函数要求深度的最小值为1米
+        zmax, map_length = self.zmax, self.map_length
+        real_to_pixel = zmax / (map_length * 2)
+        real_to_pixel = 1
+        x, y, h = self.center
+        if h < 1:
+            raise RuntimeError('深度的最小值为1米')
+
+        bbox = np.zeros((4))
+        x0, y0 = x*real_to_pixel, y*real_to_pixel
+
+        lat_i = self.I
+        if 0 <= lat_i < 15:
+            # print('if 1')
+            w_base = 3.7 * real_to_pixel
+            h_base = 5.4 * real_to_pixel
+            w_in = 0.5 * real_to_pixel
+            h_in = 0.67 * real_to_pixel
+        elif 15 <= lat_i < 45:
+            # print('elif 1')
+            w_base = 4.6 * real_to_pixel
+            h_base = 5.2 * real_to_pixel
+            w_in = 0.5 * real_to_pixel
+            h_in = 0.8 * real_to_pixel
+        elif 45 <= lat_i < 75:
+            # print('elif 2')
+            w_base = 3.4 * real_to_pixel
+            h_base = 4.2 * real_to_pixel
+            w_in = 0.5 * real_to_pixel
+            h_in = 0.65 * real_to_pixel
+        else:
+            # print('else')
+            w_base = 3.6 * real_to_pixel
+            h_base = 3.6 * real_to_pixel
+            w_in = 0.40 * real_to_pixel
+            h_in = 0.40 * real_to_pixel
+        n = int((h - 0.8)/0.2)
+        n = 1
+        t1 = n*w_in
+        t2 = n*h_in
+
+        bbox[:] = np.array(
+            [x0-(h_base/2)-t2/2, y0-(w_base/2)-t1/2, h_base+t1, w_base+t2])
+        #   x                       y                w               h
+
+        # 边界处理
+        b0, b1, b2, b3 = bbox
+        x2 = b0 + b2
+        y2 = b1 + b3
+        bbox[0] = max(-map_length, min(map_length, bbox[0]))
+        bbox[1] = max(-map_length, min(map_length, bbox[1]))
+        x2 = max(-map_length, min(map_length, x2))
+        y2 = max(-map_length, min(map_length, y2))
+        bbox[2] = x2 - bbox[0]
+        bbox[3] = y2 - bbox[1]
+
+        return bbox
 
 
 class Dipole(MyModels):
@@ -634,6 +701,7 @@ def generate_random_muti_mix_data(
         for j in range(num_of_dipoles[i]):
             x, y, h, a, b, c, gama, theta, phi = parameter[i, j]  # 参数列表
             # 椭圆长轴长
+            a = a*e_of_E
             tem_data = kind[kind_of_data[i, j]](
                 map_length=map_length, zmax=zmax,  # 通用参数
                 x=x, y=y, h=h, r=a,  # 位置参数及球的所有参数
@@ -764,14 +832,14 @@ def add_gaussian_noise(X_data_array, mean=0, var=0.1, n_models_with_noise=100, s
 
         elif (100 < np.max(X_data_array[m, :, :])) and (np.max(X_data_array[m, :, :]) < 1000):
 
-            var = 5
+            var = 4
 
         elif (-1000 < np.min(X_data_array[m, :, :])) and (np.min(X_data_array[m, :, :]) < -100):
 
-            var = 5
+            var = 4
 
         else:
-            var = 10
+            var = 4
 
         sigma = var ** 0.5
 
@@ -844,6 +912,7 @@ def convert_to_YOLO(
     X_array_data = X_data_array.reshape(
         X_data_array.shape[0], X_data_array.shape[1], X_data_array.shape[2], 1)
     length = int(map_length*2)
+
     bbox[:, :, 0] = bbox[:, :, 0]+bbox[:, :, 2]/2 + map_length
     bbox[:, :, 1] = bbox[:, :, 1]+bbox[:, :, 3]/2 + map_length
 
@@ -948,7 +1017,6 @@ def map_rgb(data):
     G = np.zeros_like(RGB)
     B = np.zeros_like(RGB)
 
-    print(RGB2.shape)
     # 取整分段
     labels = data//0.2
     mask0 = (labels == 0)
@@ -979,7 +1047,7 @@ def map_rgb(data):
 
 
 def convert_to_YOLO_mix(
-        num_of_dipoles, bbox, X_data_array, root_dir=None, map_length=25):
+        num_of_dipoles, bbox, X_data_array, kind_of_data, root_dir=None, map_length=25):
     num_of_datas, imgsize = X_data_array.shape[:2]
     # rgb_num = 16777215  # RGBnum 2^8^3-1
 
@@ -1029,17 +1097,18 @@ def convert_to_YOLO_mix(
             cv2.imwrite(f"{flag}_{count}.jpg", color_mapped_bgr)
 
             for bb_n_dipoles in range(num_of_dipoles[bb_n_models]):
-
+                type = kind_of_data[bb_n_models, bb_n_dipoles]
+                x, y, w, h = YOLO_box[bb_n_models, bb_n_dipoles]
                 if bb_n_dipoles == 0:
 
                     with open(f"{flag}_{count}.txt", "w") as f:
-                        f.write('0' + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 0]) + ' ' + str(
-                            YOLO_box[bb_n_models, bb_n_dipoles, 1]) + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 2]) + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 3]))
+                        f.write(str(type) + ' ' + str(x) + ' ' +
+                                str(y) + ' ' + str(w) + ' ' + str(h))
 
                 else:
                     with open(f"{flag}_{count}.txt", "a") as f:
-                        f.write('\n' + '0' + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 0]) + ' ' + str(
-                            YOLO_box[bb_n_models, bb_n_dipoles, 1]) + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 2]) + ' ' + str(YOLO_box[bb_n_models, bb_n_dipoles, 3]))
+                        f.write('\n' + str(type) + ' ' + str(x) + ' ' +
+                                str(y) + ' ' + str(w) + ' ' + str(h))
 
 
 if __name__ == '__main__':
