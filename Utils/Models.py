@@ -716,6 +716,9 @@ def generate_random_muti_mix_data(
 
 
 def X_array_reship(datas, map_lenght=25, new_size=416):
+    """ 
+    将数据重新调整成新的尺寸
+    """
     zmax = datas.shape[1]
     pixel_to_real = ((map_lenght*2)/zmax)
     real_to_pixel = zmax/(map_lenght*2)
@@ -802,6 +805,7 @@ def Plot_X_data(num_of_dipoles, bbox, datas, map_lenght=25, num=2):
 
 
 def add_gaussian_noise(X_data_array, mean=0, var=0.1, n_models_with_noise=100, seed=76):
+    """ Add Gaussian noise to the data, 操作了原始数据 """
     sigma = var ** 0.5
     zmax = X_data_array.shape[1]
     nummax = X_data_array.shape[0]
@@ -1006,8 +1010,6 @@ def map_rgb(data):
     """
     对正则化后的数据进行rgb映射
     """
-    zeros_data = np.zeros_like(data)
-    N, width, hight = data.shape
 
     # 取余填值
     RGB = ((data % 0.2)*5*255).astype(np.uint8)
@@ -1047,16 +1049,19 @@ def map_rgb(data):
 
 
 def convert_to_YOLO_mix(
-        num_of_dipoles, bbox, X_data_array, kind_of_data, root_dir=None, map_length=25):
+        num_of_dipoles, bbox, X_data_array, kind_of_data,
+        root_dir=None, map_length=25):
+    """ 不修改输入数据,仅使用data生成yolo数据 """
     num_of_datas, imgsize = X_data_array.shape[:2]
     # rgb_num = 16777215  # RGBnum 2^8^3-1
 
     # 预处理
     # box转yolo格式
     length = int(map_length*2)
-    bbox[:, :, 0] = bbox[:, :, 0]+bbox[:, :, 2]/2 + map_length
-    bbox[:, :, 1] = bbox[:, :, 1]+bbox[:, :, 3]/2 + map_length
-    YOLO_box = bbox/length
+    YOLO_box = np.copy(bbox)
+    YOLO_box[:, :, 0] = YOLO_box[:, :, 0]+YOLO_box[:, :, 2]/2 + map_length
+    YOLO_box[:, :, 1] = YOLO_box[:, :, 1]+YOLO_box[:, :, 3]/2 + map_length
+    YOLO_box = YOLO_box/length
 
     # 归一化
     X_data_array_norm = np.zeros_like(X_data_array)
@@ -1109,6 +1114,24 @@ def convert_to_YOLO_mix(
                     with open(f"{flag}_{count}.txt", "a") as f:
                         f.write('\n' + str(type) + ' ' + str(x) + ' ' +
                                 str(y) + ' ' + str(w) + ' ' + str(h))
+
+
+# 保存数据
+def save_data(save_dir, **kwargs):
+    for key, value in kwargs.items():
+        np.save(f"{save_dir}/{key}.npy", value)
+
+
+def read_data(save_dir, *args):
+    """ 需要传入参数，返回值是列表,获取单个参数需要解包 """
+    data_list = []
+    for arg in args:
+        data_list.append(np.load(f"{save_dir}/{arg}.npy"))
+    return data_list
+
+
+def split_datas_to_single(data):
+    pass
 
 
 if __name__ == '__main__':
