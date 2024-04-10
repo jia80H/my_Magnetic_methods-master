@@ -647,7 +647,7 @@ def generate_random_muti_dipole(
         r_max, h_max, data_num, Rfrequency, Hfrequency, nummax)  # (i,2) h,r
     parameters_n_of_xy = generate_random_coordinate_Dipole(
         map_length, r_max_grid, data_num, nummax)  # (data_num,9,2)
-    num_of_dipoles = np.random.randint(8, size=data_num) + 1
+    num_of_dipoles = np.random.randint(nummax-1, size=data_num) + 1
 
     parameter = np.concatenate(
         (parameters_n_of_xy, parameters_n_of_hr), axis=2)  # xyhr
@@ -668,7 +668,12 @@ def generate_random_muti_mix_data(
         map_length=25, nummax=9, data_num=4096,
         seed=43, zmax=100, property=Property):
     """
-    返回parameters, num_of_dipoles, data
+    返回parameter, num_of_dipoles, kind_of_data, bbox, datas
+    parameter: (data_num,nummax,n) n表示n个参数
+    num_of_dipoles: (,data_num) 每个数据点有多少个磁异常
+    kind_of_data: (data_num,nummax) 每个数据的类型
+    bbox: (data_num,nummax,4) 每个数据点的边界
+    datas: (data_num,zmax,zmax) 所有磁异常图
     """
     global kind, e_of_E, list_of_par
     np.random.seed(seed)
