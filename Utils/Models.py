@@ -503,7 +503,6 @@ class Dipole(MyModels):
 
 kind = [Dipole, Ellipse]
 Property = [0.5, 0.5]
-num_of_each_data_in_total = [0, 0]
 
 # [a,b,c]取值范围为[a,b) frequency=c
 par_of_dipole = [
@@ -702,6 +701,7 @@ def generate_random_muti_mix_data(
         (parameters_n_of_xy, parameters_n_of_mix), axis=2)  # x,y,h,r
 
     bbox = np.zeros((data_num, nummax, 4))
+    num_of_each_data_in_total = [0, 0]
 
     for i in range(data_num):
         for j in range(num_of_dipoles[i]):
@@ -719,7 +719,7 @@ def generate_random_muti_mix_data(
             bbox[i, j] = tem_data.YOLO_box()
             datas[i] = datas[i] + ano
 
-    return parameter, num_of_dipoles, kind_of_data, bbox, datas
+    return parameter, num_of_dipoles, kind_of_data, bbox, datas, num_of_each_data_in_total
 
 
 def X_array_reship(datas, map_lenght=25, new_size=416):

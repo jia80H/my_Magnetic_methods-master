@@ -1,5 +1,19 @@
 from matplotlib import pyplot as plt
 import numpy as np
+import cv2 as cv
+
+
+def gray_to_rgb(data_array):
+    array = data_array.astype(np.float32)
+    print(array.shape)
+    array_rgb = np.zeros(array.shape, dtype=np.float32)
+    array_rgb = np.repeat(array_rgb, 3, -1)
+
+    for n_i in range(array.shape[0]):
+        array_rgb[n_i, :, :, :] = cv.cvtColor(
+            array[n_i, :, :], cv.COLOR_GRAY2RGB)
+
+    return array_rgb.astype("float32")
 
 
 def cov_to_densenet(
@@ -110,7 +124,6 @@ def fliter_acdt_type(
     all_para = {}
 
     # 数据初始化
-    name_li = ['train', 'val', 'test']
     for k in range(kind_num):
         n = num_of_each[k]  # 该种模型的总数
         all_data[f'{k}'] = np.zeros((n, zmax, zmax))
@@ -125,19 +138,6 @@ def fliter_acdt_type(
             all_data[f'{kind}'][num] = all_densenet[n, nn]
             all_para[f'{kind}'][num] = parameter[n, nn]
             count[kind] += 1
-
-    # 数据集分割
-    for k in range(kind_num):
-        n = num_of_each[k]  # 该种模型的总数
-        n1 = int(n*0.7)
-        n2 = int(n*0.95)
-        n_each_flag = [0, n1, n2, n]  # 数据大小
-        for f_num in range(3):
-            Start = n_each_flag[f_num]
-            End = n_each_flag[f_num+1]
-            name = f"{name_li[f_num]}"
-            all_kind_para[f"{k}"][name] = all_data[Start:End]
-            all_kind_data[f"{k}"][name] = all_para[Start:End]
 
     return all_data, all_para
 
