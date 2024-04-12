@@ -503,6 +503,7 @@ class Dipole(MyModels):
 
 kind = [Dipole, Ellipse]
 Property = [0.5, 0.5]
+num_of_each_data_in_total = [0, 0]
 
 # [a,b,c]取值范围为[a,b) frequency=c
 par_of_dipole = [
@@ -675,7 +676,7 @@ def generate_random_muti_mix_data(
     bbox: (data_num,nummax,4) 每个数据点的边界
     datas: (data_num,zmax,zmax) 所有磁异常图
     """
-    global kind, e_of_E, list_of_par
+    global kind, e_of_E, list_of_par, num_of_each_data_in_total
     np.random.seed(seed)
     datas = np.zeros([data_num, zmax, zmax])
     # 生成一张图几个物体
@@ -714,6 +715,7 @@ def generate_random_muti_mix_data(
                 gama=gama, theta=theta, phi=phi  # 椭球所有参数
             )
             ano = tem_data.F
+            num_of_each_data_in_total[kind_of_data[i, j]] += 1
             bbox[i, j] = tem_data.YOLO_box()
             datas[i] = datas[i] + ano
 
@@ -1133,10 +1135,6 @@ def read_data(save_dir, *args):
     for arg in args:
         data_list.append(np.load(f"{save_dir}/{arg}.npy"))
     return data_list
-
-
-def split_datas_to_single(data):
-    pass
 
 
 if __name__ == '__main__':
