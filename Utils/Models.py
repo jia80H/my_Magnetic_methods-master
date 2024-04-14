@@ -1,7 +1,4 @@
-from cProfile import label
-import dis
 import os
-from scipy import ndimage
 from PIL import Image
 import cv2
 import numpy as np

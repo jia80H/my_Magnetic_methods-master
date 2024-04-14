@@ -1,17 +1,30 @@
-from matplotlib import pyplot as plt
-import numpy as np
+from tensorflow.keras.metrics import RootMeanSquaredError
+from tensorflow.keras import backend as K
+from tensorflow.keras.callbacks import TensorBoard
+from tensorflow.keras.losses import MSE, MAE
+from tensorflow.keras.initializers import he_normal, random_normal
+from tensorflow.keras.regularizers import l2
+from tensorflow.keras.optimizers import Adam, SGD
+from tensorflow.keras.models import Model, load_model
+from tensorflow.keras.layers import Input, ZeroPadding2D, Activation, Dense, AveragePooling2D, GlobalAveragePooling2D, MaxPooling2D, Concatenate, SpatialDropout2D, Conv2D, Flatten, BatchNormalization, Dropout
+import tensorflow as tf
+import seaborn as sns
 import cv2 as cv
+
+import numpy as np
+import random
+import matplotlib.pyplot as plt
 
 
 def gray_to_rgb(data_array):
     array = data_array.astype(np.float32)
-    print(array.shape)
+    array = np.expand_dims(array, axis=-1)
     array_rgb = np.zeros(array.shape, dtype=np.float32)
     array_rgb = np.repeat(array_rgb, 3, -1)
 
     for n_i in range(array.shape[0]):
-        array_rgb[n_i, :, :, :] = cv.cvtColor(
-            array[n_i, :, :], cv.COLOR_GRAY2RGB)
+        array_rgb[n_i] = cv.cvtColor(
+            array[n_i], cv.COLOR_GRAY2RGB)
 
     return array_rgb.astype("float32")
 
@@ -157,3 +170,134 @@ def split_data(all_data, all_para, n1=0.7, n2=0.95):
     test_data = all_data[n2:]
     test_para = all_para[n2:]
     return train_data, train_para, val_data, val_para, test_data, test_para
+
+
+def para_select(start, end, *args):
+    paras = []
+    for arg in args:
+        arg = arg[:, start:end]
+        paras.append(arg)
+
+    return paras
+
+
+def load_densnet():
+    pass
+
+
+def r2(y_true, y_pred):
+
+    SS_res = K.sum(K.square(y_true-y_pred))
+    SS_tot = K.sum(K.square(y_true - K.mean(y_true)))
+
+    return (1 - SS_res/(SS_tot + K.epsilon()))
+
+# Dense Block
+
+
+def conv_block(x, stage, branch, nb_filter, dropout_rate=None, weight_decay=1e-4):
+    '''Apply BatchNorm, Relu, bottleneck 1x1 Conv2D, 3x3 Conv2D, and option dropout
+          # Arguments
+              x: input tensor 
+              stage: index for dense block
+              branch: layer index within each dense block
+              nb_filter: number of filters
+              dropout_rate: dropout rate
+              weight_decay: weight decay factor
+      '''
+    concat_axis = -1
+
+    eps = 1.1e-5
+    conv_name_base = 'conv' + str(stage) + '_' + str(branch)
+    relu_name_base = 'relu' + str(stage) + '_' + str(branch)
+
+    # 1x1 Convolution (Bottleneck layer)
+    inter_channel = nb_filter * 4
+
+    x = BatchNormalization(epsilon=eps, axis=concat_axis,
+                           name=conv_name_base+'_x1_bn')(x)
+    x = Activation('relu', name=relu_name_base+'_x1')(x)
+    x = Conv2D(inter_channel, (1, 1), name=conv_name_base +
+               '_x1', use_bias=False)(x)
+
+    if dropout_rate:
+        x = SpatialDropout2D(dropout_rate)(x)
+
+    # 3x3 Convolution
+    x = BatchNormalization(epsilon=eps, axis=concat_axis,
+                           name=conv_name_base+'_x2_bn')(x)
+    x = Activation('relu', name=relu_name_base+'_x2')(x)
+    x = ZeroPadding2D((1, 1), name=conv_name_base+'_x2_zeropadding')(x)
+    x = Conv2D(nb_filter, (3, 3), name=conv_name_base+'_x2', use_bias=False)(x)
+
+    if dropout_rate:
+        x = SpatialDropout2D(dropout_rate)(x)
+
+    return x
+
+
+def transition_block(x, stage, nb_filter, compression=1.0, dropout_rate=None, weight_decay=1E-4):
+    ''' Apply BatchNorm, 1x1 Convolution, averagePooling, optional compression, dropout 
+          # Arguments
+              x: input tensor
+              stage: index for dense block
+              nb_filter: number of filters
+              compression: calculated as 1 - reduction. Reduces the number of feature maps in the transition block.
+              dropout_rate: dropout rate
+              weight_decay: weight decay factor
+      '''
+    eps = 1.1e-5
+
+    conv_name_base = 'conv' + str(stage) + '_blk'
+    relu_name_base = 'tanh' + str(stage) + '_blk'
+    pool_name_base = 'pool' + str(stage)
+
+    concat_axis = -1
+
+    x = BatchNormalization(epsilon=eps, axis=concat_axis,
+                           name=conv_name_base+'_bn')(x)
+    x = Activation('relu', name=relu_name_base)(x)
+    x = Conv2D(int(nb_filter * compression), (1, 1),
+               name=conv_name_base, use_bias=False)(x)
+
+    if dropout_rate:
+        x = SpatialDropout2D(dropout_rate)(x)
+
+    # x = AveragePooling2D((2, 2), strides=(2, 2), name=pool_name_base)(x)
+
+    return x
+
+
+def dense_block(
+        x, stage, nb_layers, nb_filter, growth_rate, dropout_rate=None,
+        weight_decay=1e-4, grow_nb_filters=True):
+    ''' 
+    Build a dense_block where the output of each conv_block is
+    fed to subsequent ones
+        # Arguments
+            x: input tensor
+            stage: index for dense block
+            nb_layers: the number of layers of conv_block to
+                append to the model.
+            nb_filter: number of filters
+            growth_rate: growth rate
+            dropout_rate: dropout rate
+            weight_decay: weight decay factor
+            grow_nb_filters: flag to decide to allow number of filters to grow
+    '''
+
+    eps = 1.1e-5
+    concat_feat = x
+
+    for i in range(nb_layers):
+        branch = i+1
+        x = conv_block(concat_feat, stage, branch,
+                       growth_rate, dropout_rate, weight_decay)
+        concat_feat = Concatenate(
+            axis=-1, name='concat_'+str(stage)+'_'+str(branch))([concat_feat, x])
+        # concat_feat = merge([concat_feat, x], mode='concat', concat_axis=concat_axis, name='concat_'+str(stage)+'_'+str(branch))
+
+        if grow_nb_filters:
+            nb_filter += growth_rate
+
+    return concat_feat, nb_filter
