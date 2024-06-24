@@ -1,0 +1,14 @@
+# 这里的path需要指向你项目中数据集的目录
+path: /home/jiajianhao/文档/cnn/my_Magnetic_methods-master/data/bishedata_4000_data_500_noise_0.3_0.7/
+# 这里分别指向你训练、验证、测试的文件地址，只需要指向图片的文件夹即可。但是要注意图片和labels名称要对应
+train: train  # train images (relative to 'path') 128 images
+val: val  # val images (relative to 'path') 128 images
+test: test # test images (optional)
+ 
+# Classes
+
+names:
+  0: dipole
+  1: ellipsoid
+
+  

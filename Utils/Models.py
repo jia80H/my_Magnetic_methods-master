@@ -25,12 +25,14 @@ class MyModels(object):
 class Ellipse(MyModels):
     miu_0 = 4 * np.pi * (1e-7)  # μ0为真空磁导率
     pi = np.pi
+    #  假设所有物体都是围绕其旋转轴对称的，
+    # 因此gamma=0 即 gama_rad=0
 
     def __init__(
             self, map_length=25, zmax=100,
-            x=0, y=0, h=1.5, a=0.4, b=0.1, c=0.1, e=4,
-            gama=90.0, theta=0.0, phi=-5.0,
-            b_0=55000.0, I=70.0, D=3.5,
+            x=0, y=0, h=1.5, a=0.4, b=0.1, c=0.1, e=2,
+            gama=0, theta=0.0, phi=0,  # 分别为 γ, 𝜃, ϕ
+            b_0=55000.0, I=60.0, D=-10,
             *args, **kwargs) -> None:
 
         self.map_length = map_length
@@ -49,10 +51,12 @@ class Ellipse(MyModels):
         self.e = e  # 横纵轴比
         # 椭球的方向
         self.gama = gama
+        self.gama = 0
         self.theta = theta
         self.phi = phi
         # 转为rad值
         self.gama_rad = np.radians(self.gama)
+        self.gama_rad = 0
         self.theta_rad = np.radians(self.theta)
         self.phi_rad = np.radians(self.phi)
 
@@ -187,15 +191,15 @@ class Ellipse(MyModels):
         Y = self.Y
 
         plt.contourf(X, Y, self.F, levels=levels, cmap=cmap)
-        plt.xlabel('位置X (m)')
-        plt.ylabel('位置Y (m)')
+        plt.xlabel('X (m)')
+        plt.ylabel('Y (m)')
         plt.xticks(np.arange(-map_length, map_length, step=5))
         plt.yticks(np.arange(-map_length, map_length, step=5))
 
-        plt.title(f'纬度 = {self.Latitude}°')
+        # plt.title(f'纬度 = {self.Latitude}°')
 
         clb = plt.colorbar()
-        clb.set_label('磁通密度 (nT)', labelpad=15, y=0.5, rotation=270)
+        clb.set_label('(nT)', loc='top', rotation=360)
 
         plt.show()
 
@@ -273,13 +277,13 @@ class Ellipse(MyModels):
 
 class Dipole(MyModels):
     miu_0 = 4 * np.pi * (1e-7)  # μ0为真空磁导率
-    Br = 47000
+    Br = 55000
     pi = np.pi
     ksi = 0.1
 
     def __init__(
             self, map_length=25, zmax=100, x=0,
-            y=0, h=1, r=0.1, Latitudes=70,
+            y=0, h=1, r=0.1, Latitudes=60,
             H_capteur_bas=0, h_capteur_haut=1,
             *args, **kwargs):
         self.map_length = map_length
@@ -290,7 +294,7 @@ class Dipole(MyModels):
         self.r = r
         self.V = np.round(((4)*(self.pi)*(self.r**3)) / 3, decimals=3)
         self.Latitudes = Latitudes
-        self.I = np.round(Latitudes, decimals=2)
+        self.I = np.radians(Latitudes)
         self.H_capteur_bas = H_capteur_bas
         self.H_capteur_haut = h_capteur_haut
         self.m = self.Br * self.ksi * self.V
@@ -375,6 +379,231 @@ class Dipole(MyModels):
         """
         pass
 
+    def Plot_X_array_raw(self, levels=16, cmap='rainbow'):
+        map_length = self.map_length
+        zmax = self.zmax
+
+        X = np.linspace(-map_length, map_length, zmax)
+        Y = np.linspace(-map_length, map_length, zmax)
+
+        # 调用 .ravel() 方法后，它会返回一个新的视图，该视图是一维的，
+        # 并且保持了原数组的所有元素顺序，但不改变底层数据。这样，
+        # 你就可以通过一个简单的索引来遍历所有的子图，而无需
+        # 关心它们在原始网格中的具体位置，这对于循环访问所有子图并进行统一操作非常方便。
+        # 如下便利
+        plt.contourf(X, Y, self.F, levels=levels, cmap=cmap)
+        plt.xlabel('X (m)')
+        plt.ylabel('Y (m)')
+        plt.xticks(np.arange(-map_length, map_length, step=5))
+        plt.yticks(np.arange(-map_length, map_length, step=5))
+
+        # plt.title(f'纬度 = {self.Latitudes}°')
+
+        clb = plt.colorbar()
+        clb.set_label('(nT)', loc='top', rotation=360)
+
+        plt.show()
+
+    def YOLO_box(self):
+        """
+        根据给定的参数生成一个包含多个异常的边界框。
+
+        参数：
+        N_latitudes (int): 纬度的个数。
+        n_examples (int): 异常的个数。
+        h_array (ndarray): 每个纬度上异常的高度数组。
+        map_length (float): 地图的长度。
+        zmax (float): 深度的最大值。
+
+        返回：
+        bbox (ndarray): 形状为(N_latitudes, n_examples, 4)的边界框数组。
+        """
+
+        # 这个函数要求深度的最小值为1米
+        zmax, map_length = self.zmax, self.map_length
+        real_to_pixel = zmax / (map_length * 2)
+        real_to_pixel = 1
+
+        if self.h < 1:
+            raise RuntimeError('深度的最小值为1米')
+
+        bbox = np.zeros((4))
+        y0, x0 = self.x*real_to_pixel, self.y*real_to_pixel
+
+        lat_i = self.Latitudes
+        if 0 <= lat_i < 15:
+            # print('if 1')
+            w_base = 3.7 * real_to_pixel
+            h_base = 5.4 * real_to_pixel
+            w_in = 0.5 * real_to_pixel
+            h_in = 0.67 * real_to_pixel
+        elif 15 <= lat_i < 45:
+            # print('elif 1')
+            w_base = 4.6 * real_to_pixel
+            h_base = 5.2 * real_to_pixel
+            w_in = 0.5 * real_to_pixel
+            h_in = 0.8 * real_to_pixel
+        elif 45 <= lat_i < 75:
+            # print('elif 2')
+            w_base = 3.4 * real_to_pixel
+            h_base = 4.2 * real_to_pixel
+            w_in = 0.5 * real_to_pixel
+            h_in = 0.65 * real_to_pixel
+        else:
+            # print('else')
+            w_base = 3.6 * real_to_pixel
+            h_base = 3.6 * real_to_pixel
+            w_in = 0.40 * real_to_pixel
+            h_in = 0.40 * real_to_pixel
+        n = int((self.h - 0.8)/0.2)
+        n = 1
+        t1 = n*w_in
+        t2 = n*h_in
+
+        bbox[:] = np.array(
+            [x0-(h_base/2)-t2/2, y0-(w_base/2)-t1/2, h_base+t1, w_base+t2])
+        #   x                       y                w               h
+
+        # 边界处理
+        b0, b1, b2, b3 = bbox
+        x2 = b0 + b2
+        y2 = b1 + b3
+        bbox[0] = max(-map_length, min(map_length, bbox[0]))
+        bbox[1] = max(-map_length, min(map_length, bbox[1]))
+        x2 = max(-map_length, min(map_length, x2))
+        y2 = max(-map_length, min(map_length, y2))
+        bbox[2] = x2 - bbox[0]
+        bbox[3] = y2 - bbox[1]
+
+        return bbox
+
+    def plt_with_box(self, levels=16, cmap='seismic'):
+        map_length = self.map_length
+        zmax = self.zmax
+
+        X = np.linspace(-map_length, map_length, zmax)
+        Y = np.linspace(-map_length, map_length, zmax)
+        box_orientation = self.bbox
+        x0 = box_orientation[0]
+        y0 = box_orientation[1]
+        bwidth = box_orientation[2]
+        bheight = box_orientation[3]
+        rect_real = Rectangle((x0, y0), bwidth, bheight,
+                              edgecolor='r', facecolor="none")
+        fig, ax = plt.subplots()
+        fig.set_size_inches(10, 10)
+        ax.contourf(X, Y, self.F, levels=levels, cmap=cmap)
+        ax.set_xlabel('位置X (m)')
+        ax.set_ylabel('位置Y (m)')
+        ax.add_patch(rect_real)
+        ax.set_xticks(np.arange(-map_length, map_length, step=5))
+        ax.set_yticks(np.arange(-map_length, map_length, step=5))
+
+        ax.set_title(f'纬度 = {self.Latitudes}°')
+
+
+class Dipole2(MyModels):
+    miu_0 = 4 * np.pi * (1e-7)  # μ0为真空磁导率
+    Br = 55000
+    pi = np.pi
+    ksi = 0.1
+
+    def __init__(
+            self, map_length=25, zmax=100, x=0,
+            y=0, h=1, r=0.1, Latitudes=60,
+            H_capteur_bas=0, h_capteur_haut=1,
+            *args, **kwargs):
+        self.map_length = map_length
+        self.zmax = zmax
+        self.x = x
+        self.y = y
+        self.h = h
+        self.r = r
+        self.V = np.round(((4)*(self.pi)*(self.r**3)) / 3, decimals=3)
+        self.Latitudes = Latitudes
+        self.I = np.radians(Latitudes)
+        self.H_capteur_bas = H_capteur_bas
+        self.H_capteur_haut = h_capteur_haut
+        self.m = self.Br * self.ksi * self.V
+
+        self.F = self.Anomalie()
+        self.bbox = self.YOLO_box()
+
+    @staticmethod
+    def grid(zmax, map_length):
+        X = np.linspace(-map_length, map_length, zmax).reshape(zmax, 1)
+        Y = np.linspace(-map_length, map_length, zmax).reshape(1, zmax)
+        return X, Y
+
+    """
+    def calculate_HX_ZZ_TT(self):
+        pass
+        u0=4*pi*10^-7;
+        h=1;    %%深度
+        r=0.5;        %%%半径
+        V=(4/3)*pi*r^3;
+        M=10;       %%%磁化强度
+        I0=0.5*pi/4;   %%倾斜磁化
+        I1=pi/2;    %%%垂直磁化
+        A=pi/2;     %%磁偏角
+        m=M*V;
+        term1 = (2*x**2 - y**2 - h**2) * np.cos(I0) * np.sin(A) + \
+            3*x*y*np.cos(I0)*np.sin(A) - 3*x*h*np.sin(I0)
+        HX = u0 * m * term1 / (4*np.pi*(x**2 + y**2 + h**2)**(5/2))
+
+        term2 = (2*h**2 - x**2 - y**2) * np.sin(I1) - 3*x*h * \
+            np.cos(I1)*np.sin(A) - 3*y*h*np.cos(I1)*np.sin(A)
+        ZZ1 = u0 * m * term2 / (4*np.pi*(x**2 + y**2 + h**2)**(5/2))
+
+        term3 = (2*h**2 - x**2 - y**2) * np.sin(I0) - 3*x*h * \
+            np.cos(I0)*np.sin(A) - 3*y*h*np.cos(I0)*np.sin(A)
+        ZZ = u0 * m * term3 / (4*np.pi*(x**2 + y**2 + h**2)**(5/2))
+
+        term4 = (2*h**2 - x**2 - y**2) * np.sin(I0)**2 + (2*x**2 - y**2 - h**2) * np.cos(I0)**2 * np.cos(A)**2 + \
+                (2*y**2 - x**2 - h**2) * np.cos(I0)**2 * np.sin(A)**2 - 3*x*h*np.sin(2*I0)*np.cos(A) + \
+            3*x*y*np.cos(I0)**2*np.sin(2*A) - 3*y*h*np.sin(2*I0)*np.sin(A)
+        TT = u0 * m * term4 / (4*np.pi*(x**2 + y**2 + h**2)**(5/2))
+
+        return TT
+    """
+
+    def Anomalie(self):
+        zmax = self.zmax
+        map_length = self.map_length
+        I = self.I
+        x = self.x
+        y = self.y
+        h = self.h
+        m = self.m
+        # A_0 =  # 磁偏角
+        # X, Y = self.grid(zmax, map_length)
+        # # Array with magnetic induction values
+        # X_array_raw = np.zeros((zmax, zmax))
+        # constant = self.miu_0/(4*self.pi)
+        # distance = np.sqrt((X-x)**2 + (Y-y)**2 + (h)**2)
+        # temp_A = self.m/(distance ** 5)
+        # gama = np.sin(I)
+        # bata = np.sin(I)*
+        # A =
+        # B =
+        # C =
+        # D =
+        # E =
+        # F =
+        # temp_B = A + B + C + D + E + F
+        # X_array_raw = constant*temp_A*temp_B
+
+        # A =
+        # delta_T = constant*temp_A*(A+B+C+D+E+F)
+
+        # return X_array_raw
+
+    def parameter(self):
+        """
+        返回参数 x y z r e I
+        """
+        pass
+
     def Plot_X_array_raw(self, levels=16, cmap='seismic'):
         map_length = self.map_length
         zmax = self.zmax
@@ -388,15 +617,16 @@ class Dipole(MyModels):
         # 关心它们在原始网格中的具体位置，这对于循环访问所有子图并进行统一操作非常方便。
         # 如下便利
         plt.contourf(X, Y, self.F, levels=levels, cmap=cmap)
-        plt.xlabel('位置X (m)')
-        plt.ylabel('位置Y (m)')
+        plt.xlabel('Position X (m)')
+        plt.ylabel('Position Y (m)')
         plt.xticks(np.arange(-map_length, map_length, step=5))
         plt.yticks(np.arange(-map_length, map_length, step=5))
 
-        plt.title(f'纬度 = {self.Latitudes}°')
+        # plt.title(f'纬度 = {self.Latitudes}°')
 
         clb = plt.colorbar()
-        clb.set_label('磁通密度 (nT)', labelpad=15, y=0.5, rotation=270)
+        clb.set_label('Pseudo vertical gradient (nT)',
+                      labelpad=15, y=0.5, rotation=270)
 
         plt.show()
 
@@ -720,7 +950,7 @@ def generate_random_muti_mix_data(
 
 
 def X_array_reship(datas, map_lenght=25, new_size=416):
-    """ 
+    """
     将数据重新调整成新的尺寸
     """
     zmax = datas.shape[1]
@@ -755,7 +985,7 @@ def X_array_reship(datas, map_lenght=25, new_size=416):
     return X_data
 
 
-def Plot_X_data(num_of_dipoles, bbox, datas, map_lenght=25, num=2):
+def Plot_X_data(num_of_dipoles, bbox, datas, map_lenght=25, num=2, cmap='rainbow'):
 
     n_examples = datas.shape[0]
     zmax = datas.shape[1]
@@ -767,8 +997,8 @@ def Plot_X_data(num_of_dipoles, bbox, datas, map_lenght=25, num=2):
     Y = np.linspace(-map_lenght, map_lenght, zmax)
 
     rows, cols = 1, num
-    height_2 = 14
-    width_2 = 8
+    height_2 = 12
+    width_2 = 6
     fig, axs = plt.subplots(rows, cols, figsize=(height_2, width_2))
     # fig.subplots_adjust(hspace = 0, wspace=0)
 
@@ -794,16 +1024,16 @@ def Plot_X_data(num_of_dipoles, bbox, datas, map_lenght=25, num=2):
                                        bheight_2, edgecolor='r', facecolor="none"))
 
         axs[lat_i].contourf(X, Y, datas[example, :, :],
-                            levels=18, cmap='seismic')
-        axs[lat_i].set_xlabel('Position X (m)')
-        axs[lat_i].set_ylabel('Position Y (m)')
+                            levels=18, cmap=cmap)
+        axs[lat_i].set_xlabel('X (m)')
+        axs[lat_i].set_ylabel('Y (m)')
         axs[lat_i].set_xticks(np.arange(-25, 25, step=2))
         axs[lat_i].set_yticks(np.arange(-25, 25, step=2))
         for n_iii in range(num_of_dipoles[example]):
             axs[lat_i].add_patch(rect_real[n_iii])
 
-        title = 'test'
-        axs[lat_i].set_title(f'Latitude = {title}°')
+        # title = 'test'
+        # axs[lat_i].set_title(f'Latitude = {title}°')
 
     plt.tight_layout()
 
@@ -856,7 +1086,7 @@ def add_gaussian_noise(X_data_array, mean=0, var=0.1, n_models_with_noise=100, s
     return add_noise_id
 
 
-def Plot_X_data_with_noise(num_of_dipoles, bbox, datas, with_noise_id, map_lenght=25, num=2):
+def Plot_X_data_with_noise(num_of_dipoles, bbox, datas, with_noise_id, map_lenght=25, num=2, cmap='rainbow'):
 
     n_examples = with_noise_id.shape[0]
     zmax = datas.shape[1]
@@ -868,8 +1098,8 @@ def Plot_X_data_with_noise(num_of_dipoles, bbox, datas, with_noise_id, map_lengh
     Y = np.linspace(-map_lenght, map_lenght, zmax)
 
     rows, cols = 1, num
-    height_2 = 14
-    width_2 = 8
+    height_2 = 10
+    width_2 = 4
     fig, axs = plt.subplots(rows, cols, figsize=(height_2, width_2))
     # fig.subplots_adjust(hspace = 0, wspace=0)
 
@@ -895,17 +1125,18 @@ def Plot_X_data_with_noise(num_of_dipoles, bbox, datas, with_noise_id, map_lengh
                                        bheight_2, edgecolor='r', facecolor="none"))
 
         test = axs[lat_i].contourf(X, Y, datas[example, :, :],
-                                   levels=50, cmap='gray')
-        plt.colorbar(test, ax=axs[lat_i])
-        axs[lat_i].set_xlabel('Position X (m)')
-        axs[lat_i].set_ylabel('Position Y (m)')
-        axs[lat_i].set_xticks(np.arange(-25, 25, step=2))
-        axs[lat_i].set_yticks(np.arange(-25, 25, step=2))
+                                   levels=50, cmap=cmap)
+        clb = plt.colorbar(test, ax=axs[lat_i])
+        clb.set_label('(nT)', loc='top', rotation=360)
+        axs[lat_i].set_xlabel('X (m)')
+        axs[lat_i].set_ylabel('Y (m)')
+        axs[lat_i].set_xticks(np.arange(-25, 25, step=5))
+        axs[lat_i].set_yticks(np.arange(-25, 25, step=5))
         for n_iii in range(num_of_dipoles[example]):
             axs[lat_i].add_patch(rect_real[n_iii])
 
-        title = 'test'
-        axs[lat_i].set_title(f'Latitude = {title}°')
+        # title = 'test'
+        # axs[lat_i].set_title(f'Latitude = {title}°')
 
     plt.tight_layout()
 
@@ -1120,7 +1351,6 @@ def convert_to_YOLO_mix(
                                 str(y) + ' ' + str(w) + ' ' + str(h))
 
 
-# 保存数据
 def save_data(save_dir, **kwargs):
     for key, value in kwargs.items():
         np.save(f"{save_dir}/{key}.npy", value)

@@ -90,10 +90,10 @@ def plot_densenet_data(den_data, map_lenght=25):
         plt.subplot(2, 3, i + 1)
         plt.contourf(X, Y, den_data[n_p, 0, :, :], levels=40, cmap='rainbow')
         plt.axis('on')
-        plt.xlabel('Position X (m)')
-        plt.ylabel('Position Y (m)')
+        plt.xlabel('X (m)')
+        plt.ylabel('Y (m)')
         clb = plt.colorbar()
-        clb.set_label('Pseudo vertical gradient (nT/m)',
+        clb.set_label('磁异常 (nT)',
                       labelpad=15, y=0.5, rotation=270)
 
     # Adjust subplot parameters to give specified padding
